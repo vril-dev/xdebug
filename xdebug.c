@@ -539,6 +539,49 @@ static void xdebug_env_config(void)
 	xdebug_arg_dtor(parts);
 }
 
+char trace_filename[MAX_FILENAME_LEN];
+
+void xdebug_trace_request_start() {
+	time_t now = time(NULL);
+	struct tm *t = localtime(&now);
+
+	snprintf(trace_filename, MAX_FILENAME_LEN, "%s/trace_%04d-%02d-%02d_%02d-%02d-%02d.log",
+				xdebug_output_dir,
+				t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+				t->tm_hour, t->tm_min, t->tm_sec);
+
+	FILE *trace_file = fopen(trace_filename, "w");
+	if (trace_file != NULL) {
+		fprintf(trace_file, "Trace started for process ID: %d at %ld\n", getpid(), time(NULL));
+		fclose(trace_file);
+	}
+}
+
+void xdebug_trace_request_end(int log_on_request) {
+	if (!log_on_request) {
+		return;
+	}
+
+	FILE *trace_file = fopen(trace_filename, "a");
+	if (trace_file != NULL) {
+		fprintf(trace_file, "Trace End for process ID: %d at %ld\n", getpid(), time(NULL));
+
+		const zend_execute_data *execute_data = EG(current_execute_data);
+		while (execute_data) {
+			const zend_function *func = execute_data->func;
+			if (func->common.function_name) {
+				fprintf(trace_file, "Function: %s, File: %s, Line: %d\n",
+						ZSTR_VAL(func->common.function_name),
+						ZSTR_VAL(func->op_array.filename),
+						execute_data->opline ? execute_data->opline->lineno : 0);
+			}
+			execute_data = execute_data->prev_execute_data;
+		}
+
+		fclose(trace_file);
+	}
+}
+
 int xdebug_is_output_tty(void)
 {
 	if (XG_BASE(output_is_tty) == OUTPUT_NOT_CHECKED) {
@@ -691,6 +734,8 @@ PHP_RINIT_FUNCTION(xdebug)
 
 	xdebug_base_rinit();
 
+	xdebug_trace_request_start();
+
 	return SUCCESS;
 }
 
@@ -726,6 +771,10 @@ PHP_RSHUTDOWN_FUNCTION(xdebug)
 {
 	if (XDEBUG_MODE_IS_OFF()) {
 		return SUCCESS;
+	}
+
+	if (XG(log_on_request)) {
+		xdebug_trace_request_end(XG(log_on_request));
 	}
 
 	if (XDEBUG_MODE_IS(XDEBUG_MODE_DEVELOP)) {
